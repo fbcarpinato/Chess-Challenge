@@ -1,22 +1,40 @@
 ﻿using ChessChallenge.API;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace ChessChallenge.Example
 {
     public class MyBot : IChessBot
     {
-        int maxDepth = 6;
+        int maxDepth = 4;
 
         int[] pieceValues = { 0, 100, 320, 330, 500, 900, 20000 };
 
+        readonly int capacity = 10000000;
+        readonly LinkedList<ulong> lruList = new LinkedList<ulong>();
+        readonly Dictionary<ulong, Tuple<int, Move, int>> transpositionTable = new Dictionary<ulong, Tuple<int, Move, int>>();
+
         public Move Think(Board board, Timer timer)
         {
-            return Minimax(board, maxDepth, true, int.MinValue, int.MaxValue).Item2;
+            Move bestMove = new Move();
+
+            for (int depth = 1; depth <= maxDepth; depth++)
+            {
+                var result = Minimax(board, depth, true, int.MinValue, int.MaxValue);
+                bestMove = result.Item2;
+            }
+
+            return bestMove;
         }
 
         public Tuple<int, Move> Minimax(Board board, int depth, bool maximizingPlayer, int alpha, int beta)
         {
+            if (transpositionTable.TryGetValue(board.ZobristKey, out Tuple<int, Move, int> cachedValue) && cachedValue.Item3 >= depth)
+            {
+                return new Tuple<int, Move>(cachedValue.Item1, cachedValue.Item2);
+            }
+
             if (depth == 0 || board.IsDraw() || board.IsInCheckmate())
             {
                 return new Tuple<int, Move>(EvaluateBoard(board), new Move());
@@ -43,6 +61,7 @@ namespace ChessChallenge.Example
                     if (beta <= alpha)
                         break;
                 }
+                AddToTranspositionTable(board.ZobristKey, new Tuple<int, Move, int>(maxEval, bestMove, depth));
                 return new Tuple<int, Move>(maxEval, bestMove);
             }
             else
@@ -62,6 +81,7 @@ namespace ChessChallenge.Example
                     if (beta <= alpha)
                         break;
                 }
+                AddToTranspositionTable(board.ZobristKey, new Tuple<int, Move, int>(minEval, bestMove, depth));
                 return new Tuple<int, Move>(minEval, bestMove);
             }
         }
@@ -138,6 +158,24 @@ namespace ChessChallenge.Example
             board.UndoMove(move);
 
             return score;
+        }
+
+        private void AddToTranspositionTable(ulong key, Tuple<int, Move, int> value)
+        {
+            if (transpositionTable.Count >= capacity)
+            {
+                RemoveFirst();
+            }
+
+            transpositionTable[key] = value;
+            lruList.AddLast(key);
+        }
+
+        private void RemoveFirst()
+        {
+            ulong key = lruList.First.Value;
+            lruList.RemoveFirst();
+            transpositionTable.Remove(key);
         }
 
     }
