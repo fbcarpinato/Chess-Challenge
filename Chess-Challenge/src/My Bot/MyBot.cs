@@ -11,7 +11,8 @@ namespace ChessChallenge.Example
 
         int[] pieceValues = { 0, 100, 320, 330, 500, 900, 20000 };
 
-        readonly int capacity = 10000000;
+        int capacity = (int)(2L * 1024 * 1024 * 1024 / 14);
+
         readonly LinkedList<ulong> lruList = new LinkedList<ulong>();
         readonly Dictionary<ulong, Tuple<int, Move, int>> transpositionTable = new Dictionary<ulong, Tuple<int, Move, int>>();
 
@@ -37,7 +38,7 @@ namespace ChessChallenge.Example
 
             if (depth == 0 || board.IsDraw() || board.IsInCheckmate())
             {
-                return new Tuple<int, Move>(EvaluateBoard(board), new Move());
+                return new Tuple<int, Move>(Quiescence(board, alpha, beta), new Move());
             }
 
             Move bestMove = lastBestMove;
@@ -113,7 +114,6 @@ namespace ChessChallenge.Example
                 }
             }
 
-
             foreach (Move move in board.GetLegalMoves())
             {
                 mobility[board.IsWhiteToMove ? 0 : 1]++;
@@ -123,16 +123,21 @@ namespace ChessChallenge.Example
                 board.UndoMove(move);
             }
 
-            board.MakeMove(new Move());
-            foreach (Move move in board.GetLegalMoves())
-            {
-                mobility[board.IsWhiteToMove ? 0 : 1]++;
 
-                board.MakeMove(move);
-                if (board.IsInCheck()) checks[board.IsWhiteToMove ? 0 : 1]++;
-                board.UndoMove(move);
+            var skipTurn = board.TrySkipTurn();
+
+            if (skipTurn)
+            {
+                foreach (Move move in board.GetLegalMoves())
+                {
+                    mobility[board.IsWhiteToMove ? 0 : 1]++;
+
+                    board.MakeMove(move);
+                    if (board.IsInCheck()) checks[board.IsWhiteToMove ? 0 : 1]++;
+                    board.UndoMove(move);
+                }
+                board.UndoSkipTurn();
             }
-            board.UndoMove(new Move());
 
             int firstIndex = board.IsWhiteToMove ? 0 : 1;
             int secondIndex = board.IsWhiteToMove ? 1 : 0;
@@ -150,15 +155,7 @@ namespace ChessChallenge.Example
 
         Move[] OrderMoves(Board board, Move[] moves, Move lastBestMove)
         {
-            var scoredMoves = moves.Select(move => new
-            {
-                Move = move,
-                Score = GetMoveScore(board, move)
-            });
-
-            var orderedMoves = scoredMoves.OrderByDescending(x => x.Score).Select(x => x.Move);
-
-            return orderedMoves.ToArray();
+            return moves.OrderByDescending(move => move.Equals(lastBestMove) ? int.MaxValue : GetMoveScore(board, move)).ToArray();
         }
 
         int GetMoveScore(Board board, Move move)
@@ -206,6 +203,12 @@ namespace ChessChallenge.Example
                 RemoveFirst();
             }
 
+            // Only replace the existing entry if the new one has a greater or equal depth
+            if (transpositionTable.TryGetValue(key, out var existingValue) && existingValue.Item3 > value.Item3)
+            {
+                return; // Do not replace deeper or equal depth entries
+            }
+
             transpositionTable[key] = value;
             lruList.AddLast(key);
         }
@@ -215,6 +218,33 @@ namespace ChessChallenge.Example
             ulong key = lruList.First.Value;
             lruList.RemoveFirst();
             transpositionTable.Remove(key);
+        }
+
+        private int Quiescence(Board board, int alpha, int beta)
+        {
+            int stand_pat = EvaluateBoard(board);
+
+            if (stand_pat >= beta)
+                return beta;
+
+            if (alpha < stand_pat)
+                alpha = stand_pat;
+
+            var captures = board.GetLegalMoves().Where(m => m.IsCapture);
+
+            foreach (Move capture in captures)
+            {
+                board.MakeMove(capture);
+                int score = -Quiescence(board, -beta, -alpha);
+                board.UndoMove(capture);
+
+                if (score >= beta)
+                    return beta;
+                if (score > alpha)
+                    alpha = score;
+            }
+
+            return alpha;
         }
 
     }
