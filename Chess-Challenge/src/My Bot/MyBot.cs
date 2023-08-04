@@ -21,14 +21,14 @@ namespace ChessChallenge.Example
 
             for (int depth = 1; depth <= maxDepth; depth++)
             {
-                var result = Minimax(board, depth, true, int.MinValue, int.MaxValue);
+                var result = Minimax(board, depth, true, int.MinValue, int.MaxValue, bestMove);
                 bestMove = result.Item2;
             }
 
             return bestMove;
         }
 
-        public Tuple<int, Move> Minimax(Board board, int depth, bool maximizingPlayer, int alpha, int beta)
+        public Tuple<int, Move> Minimax(Board board, int depth, bool maximizingPlayer, int alpha, int beta, Move lastBestMove)
         {
             if (transpositionTable.TryGetValue(board.ZobristKey, out Tuple<int, Move, int> cachedValue) && cachedValue.Item3 >= depth)
             {
@@ -40,17 +40,17 @@ namespace ChessChallenge.Example
                 return new Tuple<int, Move>(EvaluateBoard(board), new Move());
             }
 
-            Move bestMove = new Move();
+            Move bestMove = lastBestMove;
             var moves = board.GetLegalMoves();
-            moves = OrderMoves(board, moves);
+            moves = OrderMoves(board, moves, bestMove);
 
             if (maximizingPlayer)
             {
                 int maxEval = int.MinValue;
-                foreach (Move move in board.GetLegalMoves())
+                foreach (Move move in moves)
                 {
                     board.MakeMove(move);
-                    int eval = Minimax(board, depth - 1, false, alpha, beta).Item1;
+                    int eval = Minimax(board, depth - 1, false, alpha, beta, bestMove).Item1;
                     board.UndoMove(move);
                     if (eval > maxEval)
                     {
@@ -70,7 +70,7 @@ namespace ChessChallenge.Example
                 foreach (Move move in moves)
                 {
                     board.MakeMove(move);
-                    int eval = Minimax(board, depth - 1, true, alpha, beta).Item1;
+                    int eval = Minimax(board, depth - 1, true, alpha, beta, bestMove).Item1;
                     board.UndoMove(move);
                     if (eval < minEval)
                     {
@@ -93,12 +93,11 @@ namespace ChessChallenge.Example
                 return int.MaxValue;
             }
 
-            int gamePhase = 0;
             int[] material = new int[2];
             int[] mobility = new int[2];
             int[] checks = new int[2];
 
-            for (int pieceType = 0; pieceType <= 5; pieceType++)
+            for (int pieceType = 0; pieceType <= 6; pieceType++)
             {
                 for (int color = 0; color <= 1; color++)
                 {
@@ -108,26 +107,48 @@ namespace ChessChallenge.Example
                     {
                         if (((pieces >> sq) & 1) == 1)
                         {
-                            gamePhase += pieceValues[pieceType];
                             material[color] += pieceValues[pieceType];
                         }
                     }
                 }
             }
 
+
             foreach (Move move in board.GetLegalMoves())
             {
-                board.MakeMove(move);
                 mobility[board.IsWhiteToMove ? 0 : 1]++;
+
+                board.MakeMove(move);
                 if (board.IsInCheck()) checks[board.IsWhiteToMove ? 0 : 1]++;
                 board.UndoMove(move);
             }
 
-            int mgScore = material[board.IsWhiteToMove ? 0 : 1] - material[board.IsWhiteToMove ? 1 : 0] + mobility[board.IsWhiteToMove ? 0 : 1] - mobility[board.IsWhiteToMove ? 1 : 0] + checks[board.IsWhiteToMove ? 0 : 1] * 10 - checks[board.IsWhiteToMove ? 1 : 0] * 10;
+            board.MakeMove(new Move());
+            foreach (Move move in board.GetLegalMoves())
+            {
+                mobility[board.IsWhiteToMove ? 0 : 1]++;
+
+                board.MakeMove(move);
+                if (board.IsInCheck()) checks[board.IsWhiteToMove ? 0 : 1]++;
+                board.UndoMove(move);
+            }
+            board.UndoMove(new Move());
+
+            int firstIndex = board.IsWhiteToMove ? 0 : 1;
+            int secondIndex = board.IsWhiteToMove ? 1 : 0;
+
+            int materialMgScore = material[firstIndex] - material[secondIndex];
+            int mobilityMgScore = mobility[firstIndex] - mobility[secondIndex];
+            int checksMgScore = checks[firstIndex] * 10 - checks[secondIndex] * 10;
+
+            int mgScore = materialMgScore
+                + mobilityMgScore
+                + checksMgScore;
+
             return mgScore;
         }
 
-        Move[] OrderMoves(Board board, Move[] moves)
+        Move[] OrderMoves(Board board, Move[] moves, Move lastBestMove)
         {
             var scoredMoves = moves.Select(move => new
             {
@@ -135,7 +156,9 @@ namespace ChessChallenge.Example
                 Score = GetMoveScore(board, move)
             });
 
-            return scoredMoves.OrderByDescending(x => x.Score).Select(x => x.Move).ToArray();
+            var orderedMoves = scoredMoves.OrderByDescending(x => x.Score).Select(x => x.Move);
+
+            return orderedMoves.ToArray();
         }
 
         int GetMoveScore(Board board, Move move)
@@ -151,10 +174,26 @@ namespace ChessChallenge.Example
                 score += pieceValues[(int)move.PromotionPieceType] - pieceValues[(int)PieceType.Pawn];
 
             board.MakeMove(move);
+
             if (board.IsInCheckmate())
                 score += 1000000;
             else if (board.IsInCheck())
                 score += 5000;
+
+            // Encourage piece development and king safety.
+            if (capturingPiece.PieceType == PieceType.Knight || capturingPiece.PieceType == PieceType.Bishop)
+                score += 50;
+
+            // Define the center of the board.
+            var centerFiles = new[] { 3, 4 };
+            var centerRanks = new[] { 3, 4 };
+
+            if (centerFiles.Contains(move.TargetSquare.File) && centerRanks.Contains(move.TargetSquare.Rank))
+                score += 10;
+
+            if (move.IsCastles)
+                score += 100;
+
             board.UndoMove(move);
 
             return score;
